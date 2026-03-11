@@ -1,0 +1,84 @@
+version: '3.9'
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: tcf
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+
+  backend:
+    platform: ${DOCKER_PLATFORM:-linux/amd64}
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      SECRET_KEY: super-secret-key
+      DATABASE_URL: postgresql+psycopg2://postgres:postgres@postgres:5432/tcf
+      ACCESS_TOKEN_EXPIRE_MINUTES: 60
+      ESCALATION_CHECK_INTERVAL_MINUTES: 10
+      SENTENCE_TRANSFORMER_MODEL: sentence-transformers/all-MiniLM-L6-v2
+      QUERY_SIMILARITY_THRESHOLD: 0.85
+      FAISS_INDEX_PATH: /app/artifacts/faiss/query.index
+      FAISS_METADATA_PATH: /app/artifacts/faiss/query_meta.json
+      POLICY_DOCS_PATH: /app/knowledge_base/policies
+      KB_FAISS_INDEX_PATH: /app/artifacts/faiss/kb.index
+      KB_FAISS_METADATA_PATH: /app/artifacts/faiss/kb_meta.json
+      LLM_MODEL_NAME: google/flan-t5-small
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+    depends_on:
+      - postgres
+      - redis
+    ports:
+      - "8000:8000"
+    volumes:
+      - backend_artifacts:/app/artifacts
+
+  celery-worker:
+    platform: ${DOCKER_PLATFORM:-linux/amd64}
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: celery -A app.workers.celery_app.celery_app worker --loglevel=info
+    environment:
+      SECRET_KEY: super-secret-key
+      DATABASE_URL: postgresql+psycopg2://postgres:postgres@postgres:5432/tcf
+      ESCALATION_CHECK_INTERVAL_MINUTES: 10
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+    depends_on:
+      - backend
+      - redis
+      - postgres
+    volumes:
+      - backend_artifacts:/app/artifacts
+
+  frontend:
+    platform: ${DOCKER_PLATFORM:-linux/amd64}
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "3000:80"
+
+volumes:
+  postgres_data:
+  backend_artifacts:
